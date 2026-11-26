@@ -24,9 +24,11 @@ public static class Chunker
     private static readonly Regex ChapterPattern =
         new(@"(?=^CHAPTER \d+:)", RegexOptions.Multiline | RegexOptions.Compiled);
 
-    // Sentence boundary: ends with . ! or ? followed by whitespace.
+    // Sentence boundary: ends with . ! or ? followed by whitespace,
+    // but NOT after common abbreviations like Mr. Mrs. Dr. Jr. Sr. etc.
+    // The negative lookbehind prevents splitting on "Mr. " or "Mrs. ".
     private static readonly Regex SentencePattern =
-        new(@"(?<=[.!?])\s+", RegexOptions.Compiled);
+        new(@"(?<![A-Z][a-z]{0,3})(?<=[.!?])\s+(?=[A-Z""'(])", RegexOptions.Compiled);
 
     /// <summary>
     /// Splits <paramref name="cleanText"/> into chunks.

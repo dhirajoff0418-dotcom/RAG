@@ -18,11 +18,14 @@ public static class PromptTemplates
     /// cite its sources rather than inventing information.
     /// </summary>
     public const string RagSystemPrompt =
-        "You are a helpful assistant that answers questions using ONLY the " +
-        "context passages provided below. " +
-        "Rules you must follow:\n" +
-        "1. Base every claim on the context. Do not use outside knowledge.\n" +
-        "2. If the answer is not present in the context, reply exactly: " +
+        "You are a helpful assistant answering questions about a book. " +
+        "You will be given several context passages extracted from the book. " +
+        "Rules:\n" +
+        "1. Answer using the context passages. You may also use widely known facts " +
+            "about the book that are consistent with the context (e.g. character names, " +
+            "relationships) — but never contradict the context.\n" +
+        "2. If the answer truly cannot be determined from the context or general knowledge " +
+            "of the book, reply: " +
             "\"I don't have enough information in the provided sources to answer that.\"\n" +
         "3. At the end of your answer, list the sources you used in a 'Sources:' section.\n" +
         "4. Keep answers concise and directly relevant to the question.\n" +

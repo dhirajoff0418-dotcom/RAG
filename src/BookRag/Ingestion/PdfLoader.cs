@@ -86,18 +86,51 @@ public sealed class PdfLoader : IDocumentLoader
         return Task.FromResult(allChunks);
     }
 
-    // ── Helpers ──────────────────────────────────────────────────────────────
-
     /// <summary>
-    /// Extracts all text from a PDF page, joining words with spaces.
-    /// PdfPig gives us individual words with their positions; we join them
-    /// left-to-right, top-to-bottom which is correct for most layouts.
+    /// Extracts all text from a PDF page, grouping words into lines by their
+    /// vertical (Y) position so paragraph structure is preserved.
+    /// PdfPig gives us individual words with their bounding boxes; we sort
+    /// them by descending Y (top-to-bottom) and group words on the same line
+    /// together, then join lines with a newline.  This avoids the flat
+    /// word-join that loses paragraph breaks and merges unrelated text.
     /// </summary>
     private static string ExtractPageText(Page page)
     {
-        // PdfPig's Words() gives us positioned words.  Simple join is good
-        // enough for most single-column documents.
-        var words = page.GetWords();
-        return string.Join(" ", words.Select(w => w.Text)).Trim();
+        const double lineHeightTolerance = 3.0; // points; words within this Y-delta share a line
+
+        var words = page.GetWords().ToList();
+        if (words.Count == 0) return string.Empty;
+
+        // Sort words top-to-bottom (descending Y in PDF coords), left-to-right.
+        var sorted = words
+            .OrderByDescending(w => w.BoundingBox.Bottom)
+            .ThenBy(w => w.BoundingBox.Left)
+            .ToList();
+
+        var lines = new List<string>();
+        var currentLine = new List<string> { sorted[0].Text };
+        var currentY    = sorted[0].BoundingBox.Bottom;
+
+        for (var i = 1; i < sorted.Count; i++)
+        {
+            var word = sorted[i];
+            if (Math.Abs(word.BoundingBox.Bottom - currentY) <= lineHeightTolerance)
+            {
+                // Same line — add word to current line.
+                currentLine.Add(word.Text);
+            }
+            else
+            {
+                // New line — flush the current line and start a new one.
+                lines.Add(string.Join(" ", currentLine));
+                currentLine = [word.Text];
+                currentY    = word.BoundingBox.Bottom;
+            }
+        }
+
+        if (currentLine.Count > 0)
+            lines.Add(string.Join(" ", currentLine));
+
+        return string.Join("\n", lines).Trim();
     }
 }

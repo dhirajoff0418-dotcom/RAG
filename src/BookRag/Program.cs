@@ -51,20 +51,34 @@ static async Task RunIngestAsync(string[] sources, AppConfig config)
 {
     if (sources.Length == 0)
     {
-        Console.WriteLine("Usage: bookrag ingest <file-or-url> [<file-or-url> ...]");
+        Console.WriteLine("Usage: bookrag ingest [--fresh] <file-or-url> [<file-or-url> ...]");
+        Console.WriteLine("  --fresh   Clear the existing collection before ingesting");
         Console.WriteLine("Examples:");
         Console.WriteLine("  bookrag ingest data/book.txt");
-        Console.WriteLine("  bookrag ingest report.pdf");
+        Console.WriteLine("  bookrag ingest --fresh report.pdf");
         Console.WriteLine("  bookrag ingest https://example.com/article");
+        return;
+    }
+
+    // Parse --fresh flag
+    bool fresh = sources[0].Equals("--fresh", StringComparison.OrdinalIgnoreCase);
+    if (fresh) sources = sources[1..];
+
+    if (sources.Length == 0)
+    {
+        Console.WriteLine("Error: no source files specified after --fresh.");
         return;
     }
 
     // Load the existing vector store so we can append to it.
     var store  = new JsonVectorStore(config.DataDirectory, config.CollectionName);
-    var chunks = await store.LoadAsync();
+    var chunks = fresh ? new List<BookRag.Models.Chunk>() : await store.LoadAsync();
     var nextId = chunks.Count > 0 ? chunks.Max(c => c.Id) + 1 : 0;
 
-    Console.WriteLine($"Collection: '{config.CollectionName}' ({chunks.Count} existing chunks)");
+    if (fresh)
+        Console.WriteLine($"Collection: '{config.CollectionName}' (cleared for fresh ingest)");
+    else
+        Console.WriteLine($"Collection: '{config.CollectionName}' ({chunks.Count} existing chunks)");
     Console.WriteLine($"Store:      {((JsonVectorStore)store).FilePath}\n");
 
     using var embedder = new LocalEmbeddingService();

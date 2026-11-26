@@ -18,7 +18,8 @@ public class AppConfig
     /// <summary>
     /// Groq chat model to use.
     /// See https://console.groq.com/docs/models for available IDs.
-    /// Default: llama-3.3-70b-versatile (fast, capable, free tier available).
+    /// Default: openai/gpt-oss-120b (500 t/s, available on the developer plan).
+    /// llama-3.3-70b-versatile is now Enterprise-only.
     /// </summary>
     public string GroqModel { get; }
 
@@ -81,16 +82,16 @@ public class AppConfig
         GroqApiKey = Env("GROQ_API_KEY", "");
 
         // LLM
-        GroqModel       = Env("GROQ_MODEL",       "llama-3.3-70b-versatile");
+        GroqModel       = Env("GROQ_MODEL",       "openai/gpt-oss-120b");
         LlmTemperature  = double.Parse(Env("LLM_TEMPERATURE", "0.1"));
 
         // Retrieval
         RetrievalTopK       = int.Parse(Env("RETRIEVAL_TOP_K",         "5"));
-        SimilarityThreshold = float.Parse(Env("SIMILARITY_THRESHOLD",  "0.3"));
+        SimilarityThreshold = float.Parse(Env("SIMILARITY_THRESHOLD",  "0.15"));
 
         // Chunking
-        ChunkMaxChars        = int.Parse(Env("CHUNK_MAX_CHARS",          "600"));
-        ChunkOverlapSentences = int.Parse(Env("CHUNK_OVERLAP_SENTENCES", "1"));
+        ChunkMaxChars        = int.Parse(Env("CHUNK_MAX_CHARS",          "1000"));
+        ChunkOverlapSentences = int.Parse(Env("CHUNK_OVERLAP_SENTENCES", "2"));
 
         // Storage — resolve the data directory relative to the project root
         // when running from the standard build output location, otherwise
