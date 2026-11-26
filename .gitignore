@@ -1,0 +1,22 @@
+# Build output
+bin/
+obj/
+
+# User secrets and environment files — NEVER commit these
+.env
+*.env.local
+
+# Vector store files — regenerate locally with `bookrag ingest`
+data/*.json
+
+# IDE files
+.vs/
+.vscode/
+*.user
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# NuGet
+*.nupkg
