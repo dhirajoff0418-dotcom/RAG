@@ -1,0 +1,42 @@
+[
+  {
+    "question": "What are the names of Harry Potter's parents?",
+    "expected_keywords": ["James", "Lily", "Potter"]
+  },
+  {
+    "question": "Who is Hagrid and what is his job at Hogwarts?",
+    "expected_keywords": ["Hagrid", "gamekeeper", "Keeper of Keys"]
+  },
+  {
+    "question": "Which house is Harry sorted into?",
+    "expected_keywords": ["Gryffindor"]
+  },
+  {
+    "question": "What is the name of Harry's owl?",
+    "expected_keywords": ["Hedwig"]
+  },
+  {
+    "question": "Who is the villain of the story?",
+    "expected_keywords": ["Voldemort", "You-Know-Who", "He-Who-Must-Not-Be-Named", "Quirrell"]
+  },
+  {
+    "question": "What is the Philosopher's Stone and what does it do?",
+    "expected_keywords": ["Philosopher", "Stone", "immortality", "Elixir", "Nicolas Flamel"]
+  },
+  {
+    "question": "Who are Harry's two best friends at Hogwarts?",
+    "expected_keywords": ["Ron", "Hermione"]
+  },
+  {
+    "question": "Where does Harry live before he finds out he is a wizard?",
+    "expected_keywords": ["Privet Drive", "Dursley", "cupboard"]
+  },
+  {
+    "question": "What sport do students play at Hogwarts on broomsticks?",
+    "expected_keywords": ["Quidditch"]
+  },
+  {
+    "question": "What does Harry see in the Mirror of Erised?",
+    "expected_keywords": ["Mirror", "Erised", "family", "parents", "desire"]
+  }
+]

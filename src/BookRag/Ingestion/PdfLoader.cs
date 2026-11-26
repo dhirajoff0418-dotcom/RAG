@@ -10,23 +10,16 @@ namespace BookRag.Ingestion;
 /// Pipeline:
 ///   PdfPig.Open() → extract text per page → Chunker.Split() per page → List&lt;Chunk&gt;
 ///
-/// Each chunk records the page number so answers can cite exact pages.
-///
-/// Design decisions:
-/// - Text is extracted page-by-page rather than concatenating the whole PDF.
-///   This keeps page metadata accurate and prevents a chunk from spanning
-///   two completely unrelated pages.
-/// - Scanned PDFs (images only, no text layer) will produce empty pages.
-///   The loader logs a warning and skips those pages.  Full OCR support
-///   would require a separate library (e.g. Tesseract) and can be added by
-///   implementing a new IDocumentLoader without modifying this class.
+/// Each chunk's text is prefixed with "[Page N]" so the embedding captures
+/// location context, and the chunk metadata records the exact page for
+/// accurate citations.
 /// </summary>
 public sealed class PdfLoader : IDocumentLoader
 {
     private readonly int _maxChars;
     private readonly int _overlapSentences;
 
-    public PdfLoader(int maxChars = 600, int overlapSentences = 1)
+    public PdfLoader(int maxChars = 500, int overlapSentences = 2)
     {
         _maxChars         = maxChars;
         _overlapSentences = overlapSentences;
@@ -42,8 +35,6 @@ public sealed class PdfLoader : IDocumentLoader
         var allChunks = new List<Chunk>();
         var chunkId   = 0;
 
-        // PdfPig.Open returns a synchronous reader — wrap in a task to keep
-        // the interface async for consistency with other loaders.
         using var pdf = PdfDocument.Open(filePath);
 
         foreach (var page in pdf.GetPages())
@@ -52,16 +43,19 @@ public sealed class PdfLoader : IDocumentLoader
 
             if (string.IsNullOrWhiteSpace(pageText))
             {
-                // This page has no extractable text layer.  It is likely a
-                // scanned image.  Skip it and continue.
                 Console.WriteLine($"  [warn] PDF page {page.Number} has no text — skipping.");
                 continue;
             }
 
-            // Split this page's text into chunks.  The source label includes
-            // both the filename and page number for clear citations.
             var sourceLabel = $"{fileName}, page {page.Number}";
-            var chunks      = Chunker.Split(pageText, sourceLabel, _maxChars, _overlapSentences);
+
+            // Pass the page number so Chunker can embed it in the text prefix.
+            var chunks = Chunker.Split(
+                pageText,
+                sourceLabel,
+                _maxChars,
+                _overlapSentences,
+                pageNumber: page.Number);
 
             foreach (var chunk in chunks)
             {
@@ -70,7 +64,6 @@ public sealed class PdfLoader : IDocumentLoader
                 chunk.FileName   = fileName;
                 chunk.PageNumber = page.Number;
 
-                // Ensure Source is populated even if no chapter heading was found.
                 if (string.IsNullOrWhiteSpace(chunk.Source))
                     chunk.Source = sourceLabel;
             }
@@ -86,28 +79,25 @@ public sealed class PdfLoader : IDocumentLoader
         return Task.FromResult(allChunks);
     }
 
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
     /// <summary>
     /// Extracts all text from a PDF page, grouping words into lines by their
-    /// vertical (Y) position so paragraph structure is preserved.
-    /// PdfPig gives us individual words with their bounding boxes; we sort
-    /// them by descending Y (top-to-bottom) and group words on the same line
-    /// together, then join lines with a newline.  This avoids the flat
-    /// word-join that loses paragraph breaks and merges unrelated text.
+    /// vertical (Y) position to preserve paragraph structure.
     /// </summary>
     private static string ExtractPageText(Page page)
     {
-        const double lineHeightTolerance = 3.0; // points; words within this Y-delta share a line
+        const double lineHeightTolerance = 3.0;
 
         var words = page.GetWords().ToList();
         if (words.Count == 0) return string.Empty;
 
-        // Sort words top-to-bottom (descending Y in PDF coords), left-to-right.
         var sorted = words
             .OrderByDescending(w => w.BoundingBox.Bottom)
             .ThenBy(w => w.BoundingBox.Left)
             .ToList();
 
-        var lines = new List<string>();
+        var lines       = new List<string>();
         var currentLine = new List<string> { sorted[0].Text };
         var currentY    = sorted[0].BoundingBox.Bottom;
 
@@ -116,12 +106,10 @@ public sealed class PdfLoader : IDocumentLoader
             var word = sorted[i];
             if (Math.Abs(word.BoundingBox.Bottom - currentY) <= lineHeightTolerance)
             {
-                // Same line — add word to current line.
                 currentLine.Add(word.Text);
             }
             else
             {
-                // New line — flush the current line and start a new one.
                 lines.Add(string.Join(" ", currentLine));
                 currentLine = [word.Text];
                 currentY    = word.BoundingBox.Bottom;

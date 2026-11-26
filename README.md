@@ -1,22 +1,30 @@
 # BookRag — Ask Questions About Any Document
 
 BookRag is a Retrieval-Augmented Generation (RAG) system built in C#.  
-You give it documents or web pages, and you can ask questions about them in plain English.  
+You give it documents or web pages and ask questions in plain English.  
 It finds the relevant passages and uses an LLM to generate a grounded answer with citations.
 
 **Supported sources:** `.txt` files · `.pdf` files · any website URL
 
 ---
 
-## How It Works (in plain terms)
+## How It Works
 
 ```
-Your document  →  split into chunks  →  embed each chunk as a vector  →  saved to disk
+Ingest:
+  Document → split into chunks → prefix each chunk with [Page N | CHAPTER] →
+  embed with all-MiniLM-L6-v2 → save to JSON vector store
 
-Your question  →  embed question  →  find similar chunks  →  send to LLM  →  answer + sources
+Query:
+  Question
+    → [LLM] rewrite into 3 search queries        (QUERY_REWRITE=true)
+    → [Vector] cosine similarity search × 4 queries
+    → [BM25]   keyword search        × 4 queries
+    → Reciprocal Rank Fusion (merge all results)
+    → [LLM] rerank top-20 candidates 0–10        (RERANK=true)
+    → take top-6 chunks as context
+    → [LLM] generate final answer
 ```
-
-No external vector database required. Everything runs locally except the LLM call (Groq).
 
 ---
 
@@ -29,128 +37,131 @@ No external vector database required. Everything runs locally except the LLM cal
 
 ---
 
-## Setup (5 minutes)
+## Setup
 
-**1. Clone the repo**
-```
-git clone <repo-url>
-cd BookRag
-```
-
-**2. Set your Groq API key**
-
-On Windows PowerShell:
 ```powershell
+# Set your API key (Windows PowerShell)
 $env:GROQ_API_KEY = "your_key_here"
-```
 
-On Linux / macOS:
-```bash
-export GROQ_API_KEY="your_key_here"
-```
-
-> You only need this for the `query` step. Ingestion works without it.
-
-**3. Go to the project folder**
-```
+# Change to the project folder
 cd src/BookRag
 ```
 
-That's all the setup you need.
-
 ---
 
-## Step 1 — Ingest Your Documents
-
-Point the ingester at any file or URL. It reads the content, splits it into chunks, embeds them, and saves them to `data/default.json`.
+## Ingest a Document
 
 ```powershell
-# A text file
-dotnet run -- ingest ../../data/book.txt
+# Fresh ingest (clears any existing index)
+dotnet run -- ingest --fresh ..\..\data\harry-potter-and-the-philosophers-stone-by-jk-rowling.pdf
 
-# A PDF file
-dotnet run -- ingest path/to/your/document.pdf
-
-# A web page
-dotnet run -- ingest https://en.wikipedia.org/wiki/Retrieval-augmented_generation
+# Append to an existing collection
+dotnet run -- ingest additional-book.pdf
 
 # Multiple sources at once
-dotnet run -- ingest ../../data/book.txt report.pdf https://example.com/article
+dotnet run -- ingest --fresh book.pdf https://example.com/article
 ```
 
-You will see output like:
-```
-Collection: 'default' (0 existing chunks)
-Loading 'book.txt' ... 10 chunks extracted
-  Embedding.......... done
-Saved 10 new chunks.
-```
-
-Each ingest call **adds** to the existing collection, so you can build up a knowledge base incrementally.
+> **Important:** Always use `--fresh` after changing chunking settings
+> (`CHUNK_MAX_CHARS`, `CHUNK_OVERLAP_SENTENCES`) to avoid mixing old and
+> new chunk formats in the same index.
 
 ---
 
-## Step 2 — Ask Questions
+## Ask Questions
 
 ```powershell
 dotnet run -- query
 ```
 
-Type a question and press Enter:
-
 ```
-Q> Who is Mira Castellan?
+Q> What are the names of Harry's parents?
 
-A> Mira Castellan is the new keeper of the Merrow Bay lighthouse. She arrived
-   on a grey Tuesday in October, carrying a brass compass that belonged to her
-   grandfather.
+A> From the book:
+   Harry Potter's parents were Lily and James Potter. They were wizards who
+   were killed by Lord Voldemort when Harry was just a baby.
+
+   Interpretation:
+   Their deaths define the entire story — Harry's survival is the central
+   mystery, and the love his mother gave him is later revealed to be his
+   greatest protection.
 
 Sources:
-  [0.821] book.txt — CHAPTER 1: THE ARRIVAL
-  [0.743] book.txt — CHAPTER 2: THE VILLAGE
-
-────────────────────────────────────────────────
-
-Q>
+  [9] harry-potter-and-the-philosophers-stone-by-jk-rowling.pdf, page 16
+  [8] harry-potter-and-the-philosophers-stone-by-jk-rowling.pdf, page 46
 ```
 
-Leave the question blank and press Enter to exit.
+### Debug mode
+
+Prints rewritten queries, vector hits, BM25 hits, fused ranking, and reranker scores:
+
+```powershell
+dotnet run -- query --debug
+```
+
+Or set `DEBUG=true` to enable it permanently.
 
 ---
 
-## Multiple Knowledge Bases
-
-Use `COLLECTION_NAME` to keep separate knowledge bases that do not mix.
+## Evaluate Retrieval Quality
 
 ```powershell
-# Ingest into a "research" collection
-$env:COLLECTION_NAME = "research"
-dotnet run -- ingest paper.pdf
-
-# Query only that collection
-$env:COLLECTION_NAME = "research"
-dotnet run -- query
+dotnet run -- eval
+# or specify a custom eval file:
+dotnet run -- eval ..\..\data\eval_hp1.json
 ```
 
-Each collection is a separate JSON file in the `data/` folder.
+Output:
+```
+[1/10] What are the names of Harry Potter's parents?
+  Retrieval [✓]  Answer [✓]
+  Expected keywords: James, Lily, Potter
+
+RETRIEVAL HIT RATE: 9/10 (90%)
+ANSWER   HIT RATE: 8/10 (80%)
+```
+
+A sample 10-question eval set for Harry Potter Book 1 is included at `data/eval_hp1.json`.
 
 ---
 
 ## Configuration
 
-You do not need to change any code to configure the system. Set environment variables:
+All settings are environment variables. No code changes needed.
 
-| Variable | Default | What it controls |
-|----------|---------|-----------------|
-| `GROQ_API_KEY` | *(required for query)* | Your Groq API key |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Which LLM to use |
-| `COLLECTION_NAME` | `default` | Active knowledge base |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GROQ_API_KEY` | *(required)* | Your Groq API key |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | LLM for queries, rewriting, reranking |
+| `LLM_TEMPERATURE` | `0.1` | LLM temperature (0 = factual) |
+| `COLLECTION_NAME` | `default` | Active knowledge-base name |
 | `DATA_DIRECTORY` | `./data` | Where vectors are stored |
-| `RETRIEVAL_TOP_K` | `5` | Chunks retrieved per query |
-| `SIMILARITY_THRESHOLD` | `0.3` | Minimum relevance score (0–1) |
-| `CHUNK_MAX_CHARS` | `600` | Max characters per chunk |
+| `RETRIEVAL_TOP_K` | `6` | Final chunks sent to the LLM |
+| `SIMILARITY_THRESHOLD` | `0.15` | Min cosine score for vector filter |
+| `RETRIEVAL_CANDIDATE_K` | `20` | Candidates per search pass (vector+BM25) |
+| `BM25_K1` | `1.5` | BM25 term-frequency saturation |
+| `BM25_B` | `0.75` | BM25 length normalisation |
+| `QUERY_REWRITE` | `true` | LLM query expansion before retrieval |
+| `RERANK` | `true` | LLM reranking of top-20 candidates |
+| `RERANK_CANDIDATE_K` | `20` | Candidates sent to the reranker |
+| `CHUNK_MAX_CHARS` | `500` | Max chars per chunk body |
+| `CHUNK_OVERLAP_SENTENCES` | `2` | Sentences of overlap between chunks |
+| `EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Embedding model identifier |
+| `DEBUG` | `false` | Always-on debug output |
 
-Copy `.env.example` to `.env` to see all options with descriptions.
+See `.env.example` for the full list with descriptions.
+
+---
+
+## Multiple Knowledge Bases
+
+```powershell
+$env:COLLECTION_NAME = "research"
+dotnet run -- ingest --fresh paper.pdf
+
+$env:COLLECTION_NAME = "research"
+dotnet run -- query
+```
 
 ---
 
@@ -158,18 +169,42 @@ Copy `.env.example` to `.env` to see all options with descriptions.
 
 ```
 BookRag/
-├── data/                        ← Put your documents here
-│   └── book.txt                 ← Sample document included
+├── data/
+│   ├── eval_hp1.json            ← 10 sample evaluation questions (HP Book 1)
+│   └── *.pdf / *.txt            ← Your documents
 ├── src/BookRag/
-│   ├── Config/                  ← All configuration in one place
-│   ├── Embeddings/              ← Local embedding model (no API key needed)
-│   ├── Generation/              ← LLM client + prompt templates
-│   ├── Ingestion/               ← TXT, PDF, and web loaders
-│   ├── Models/                  ← Chunk data model
-│   ├── Retrieval/               ← Semantic similarity search
-│   ├── Storage/                 ← Saves/loads the vector index
-│   └── Program.cs               ← Entry point (ingest / query commands)
-├── .env.example                 ← All environment variables documented
+│   ├── Config/
+│   │   └── AppConfig.cs         ← All settings from env vars
+│   ├── Embeddings/
+│   │   ├── IEmbeddingService.cs ← Interface (swappable)
+│   │   └── LocalEmbeddingService.cs ← all-MiniLM-L6-v2 via ONNX
+│   ├── Generation/
+│   │   ├── GroqClient.cs        ← Groq API client
+│   │   ├── ILlmClient.cs        ← Interface (swappable)
+│   │   ├── PromptTemplates.cs   ← All prompts in one place
+│   │   ├── QueryRewriter.cs     ← LLM query expansion (3 rewrites)
+│   │   ├── RagAnswerer.cs       ← Full pipeline orchestrator
+│   │   └── Reranker.cs          ← LLM relevance scoring (0–10)
+│   ├── Ingestion/
+│   │   ├── Chunker.cs           ← Sentence-based chunking + page prefix
+│   │   ├── IDocumentLoader.cs
+│   │   ├── LoaderFactory.cs
+│   │   ├── PdfLoader.cs
+│   │   ├── TextCleaner.cs
+│   │   ├── TxtLoader.cs
+│   │   └── WebLoader.cs
+│   ├── Models/
+│   │   └── Chunk.cs             ← Data model (includes EmbeddingModel field)
+│   ├── Retrieval/
+│   │   ├── Bm25Index.cs         ← Pure C# BM25 keyword index
+│   │   ├── DebugInfo.cs         ← Diagnostic data bag
+│   │   ├── Retriever.cs         ← Hybrid search (vector + BM25 + RRF)
+│   │   └── RrfMerger.cs         ← Reciprocal Rank Fusion
+│   ├── Storage/
+│   │   ├── IVectorStore.cs
+│   │   └── JsonVectorStore.cs   ← JSON persistence + meta sidecar
+│   └── Program.cs               ← ingest / query / eval commands
+├── .env.example                 ← All env vars documented
 └── README.md
 ```
 
@@ -177,25 +212,29 @@ BookRag/
 
 ## Common Questions
 
+**Why is retrieval slow the first time?**  
+The ONNX embedding model loads on first use. Subsequent queries in the same session are fast.
+
 **The PDF says "No text could be extracted"**  
-The PDF is likely scanned (image only). OCR is not currently supported. Use a PDF where you can select text with your mouse.
+The PDF is scanned (image-only). OCR is not supported — use a PDF where you can select text.
 
-**I get "GROQ_API_KEY is not set"**  
-You only need this for `query`, not for `ingest`. Set it as shown in the Setup section.
+**I get "embedding model mismatch"**  
+Your index was built with a different `EMBEDDING_MODEL`. Re-ingest with `--fresh` or restore the original `EMBEDDING_MODEL` env var.
 
-**I want to start fresh and clear the knowledge base**  
-Delete `data/default.json` (or whatever your `COLLECTION_NAME` is).
+**How do I disable query rewriting or reranking?**  
+Set `QUERY_REWRITE=false` or `RERANK=false`. Both reduce LLM calls and latency at some cost to accuracy.
 
 **Can I use a different LLM?**  
-Set `GROQ_MODEL` to any model available on your Groq account. The architecture supports adding other providers (OpenAI, Ollama) by implementing the `ILlmClient` interface.
+Implement `ILlmClient` and pass your instance to `GroqClient`'s constructor-equivalent.
 
 ---
 
 ## Tech Stack
 
 - **Language:** C# / .NET 10
-- **Embeddings:** [SmartComponents LocalEmbeddings](https://github.com/dotnet-smartcomponents/smartcomponents) (all-MiniLM-L6-v2, runs locally)
+- **Embeddings:** [SmartComponents LocalEmbeddings](https://github.com/dotnet-smartcomponents/smartcomponents) — all-MiniLM-L6-v2 (runs locally, no API key)
+- **Keyword search:** Pure C# BM25 implementation
 - **PDF extraction:** [PdfPig](https://github.com/UglyToad/PdfPig)
 - **HTML parsing:** [HtmlAgilityPack](https://html-agility-pack.net/)
 - **LLM:** [Groq](https://groq.com/) (OpenAI-compatible API)
-- **Vector store:** JSON file (simple, no external database)
+- **Vector store:** JSON file (no external database required)

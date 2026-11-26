@@ -4,58 +4,97 @@ using BookRag.Models;
 namespace BookRag.Retrieval;
 
 /// <summary>
-/// Performs in-memory semantic search over a list of embedded chunks.
+/// Performs hybrid semantic + keyword search over the chunk corpus.
 ///
-/// Given a query string it:
-///   1. Embeds the query with the same model used at ingestion time.
-///   2. Scores every chunk by cosine similarity.
-///   3. Returns the top-K chunks above the similarity threshold.
+/// Pipeline for a single query string:
+///   1. Dense vector search  — embed the query, cosine-score every chunk,
+///      keep top-N above the similarity threshold.
+///   2. BM25 keyword search  — tokenise the query, BM25-score every chunk,
+///      keep top-N.
+///   3. Reciprocal Rank Fusion — merge both ranked lists into one.
+///   4. Return up to candidateK results (the caller may rerank further).
 ///
-/// The similarity threshold prevents clearly irrelevant chunks from being
-/// included in the LLM context, which reduces hallucination and keeps
-/// prompts concise.
+/// For multi-query retrieval the caller runs Search() per rewrite and
+/// merges the resulting lists again with RrfMerger before reranking.
 /// </summary>
 public sealed class Retriever
 {
     private readonly List<Chunk>     _chunks;
     private readonly IEmbeddingService _embedder;
-    private readonly float           _similarityThreshold;
+    private readonly Bm25Index        _bm25;
+    private readonly float            _similarityThreshold;
+    private readonly int              _candidateK;
 
-    public Retriever(List<Chunk> chunks, IEmbeddingService embedder, float similarityThreshold = 0.3f)
+    public Retriever(
+        List<Chunk>      chunks,
+        IEmbeddingService embedder,
+        Bm25Index         bm25,
+        float             similarityThreshold = 0.15f,
+        int               candidateK          = 20)
     {
         _chunks              = chunks;
         _embedder            = embedder;
+        _bm25                = bm25;
         _similarityThreshold = similarityThreshold;
+        _candidateK          = candidateK;
     }
 
     /// <summary>
-    /// Returns up to <paramref name="topK"/> chunks most semantically similar
-    /// to <paramref name="query"/>, ordered by descending similarity.
+    /// Runs hybrid search for a single <paramref name="query"/> and returns
+    /// up to <see cref="_candidateK"/> merged results with their RRF scores.
     ///
-    /// Chunks with no embedding (Embedding == null) are silently skipped —
-    /// they would cause a null-reference crash and should not exist in a
-    /// correctly-built index.
+    /// Also populates the <paramref name="debugInfo"/> bag when non-null.
     /// </summary>
-    public List<(Chunk Chunk, float Score)> Search(string query, int topK = 5)
+    public List<(Chunk Chunk, double RrfScore)> Search(
+        string    query,
+        DebugInfo? debugInfo = null)
     {
+        // ── Dense vector search ───────────────────────────────────────────
         var queryVector = _embedder.Embed(query);
 
-        return _chunks
-            .Where(c => c.Embedding is not null)             // skip unembedded chunks
-            .Select(c => (Chunk: c, Score: CosineSimilarity(queryVector, c.Embedding!)))
-            .Where(x => x.Score >= _similarityThreshold)     // discard irrelevant chunks
+        var vectorHits = _chunks
+            .Where(c => c.Embedding is not null)
+            .Select(c => (Chunk: c, Score: (double)CosineSimilarity(queryVector, c.Embedding!)))
+            .Where(x => x.Score >= _similarityThreshold)
             .OrderByDescending(x => x.Score)
-            .Take(topK)
+            .Take(_candidateK)
+            .Select(x => (x.Chunk, x.Score))
             .ToList();
+
+        // ── BM25 keyword search ───────────────────────────────────────────
+        var bm25Hits = _bm25.Search(query, _candidateK);
+
+        // ── Debug output ──────────────────────────────────────────────────
+        if (debugInfo is not null)
+        {
+            debugInfo.VectorHits.Add((query, vectorHits
+                .Take(5)
+                .Select(h => $"[{h.Score:F3}] {h.Chunk.ToCitationString()}")
+                .ToList()));
+
+            debugInfo.Bm25Hits.Add((query, bm25Hits
+                .Take(5)
+                .Select(h => $"[{h.Score:F3}] {h.Chunk.ToCitationString()}")
+                .ToList()));
+        }
+
+        // ── RRF merge ─────────────────────────────────────────────────────
+        var merged = RrfMerger.Merge(
+            new[] {
+                vectorHits.Select(h => (h.Chunk, h.Score)),
+                bm25Hits.Select(h => (h.Chunk, h.Score))
+            },
+            _candidateK);
+
+        return merged;
     }
 
     // ── Math ─────────────────────────────────────────────────────────────────
 
     /// <summary>
     /// Cosine similarity = dot(a, b) / (|a| × |b|).
-    /// Returns a value in [-1, 1]; higher means more similar.
-    /// All-MiniLM embeddings are already unit-normalised, so this simplifies
-    /// to a dot product, but we keep the full formula for correctness.
+    /// all-MiniLM embeddings are unit-normalised, so this simplifies to a
+    /// dot product, but we keep the full formula for correctness with any model.
     /// </summary>
     public static float CosineSimilarity(float[] a, float[] b)
     {
@@ -69,8 +108,6 @@ public sealed class Retriever
         }
 
         var denom = MathF.Sqrt(normA) * MathF.Sqrt(normB);
-
-        // Guard against division by zero (e.g. all-zero embedding).
         return denom < 1e-10f ? 0f : dot / denom;
     }
 }

@@ -18,7 +18,7 @@ public class AppConfig
     /// <summary>
     /// Groq chat model to use.
     /// See https://console.groq.com/docs/models for available IDs.
-    /// Default: openai/gpt-oss-120b (500 t/s, available on the developer plan).
+    /// Default: openai/gpt-oss-120b (available on the developer plan).
     /// llama-3.3-70b-versatile is now Enterprise-only.
     /// </summary>
     public string GroqModel { get; }
@@ -31,15 +31,55 @@ public class AppConfig
 
     // ── Retrieval Settings ──────────────────────────────────────────────────
 
-    /// <summary>How many top chunks to retrieve per query.</summary>
+    /// <summary>
+    /// How many top chunks to pass to the LLM as final context.
+    /// </summary>
     public int RetrievalTopK { get; }
 
     /// <summary>
-    /// Minimum cosine similarity (0–1) for a chunk to be included in the
-    /// context. Chunks scoring below this are discarded even if they are in
-    /// the top-K.  Set to 0 to disable filtering.
+    /// Minimum cosine similarity (0–1) for a chunk to pass the VECTOR
+    /// filter.  Chunks below this are excluded from the vector side only;
+    /// BM25 hits are not filtered by this value.
     /// </summary>
     public float SimilarityThreshold { get; }
+
+    /// <summary>
+    /// How many candidates each of vector and BM25 search return before RRF
+    /// merging.  Higher = more recall, more reranking work.
+    /// </summary>
+    public int RetrievalCandidateK { get; }
+
+    // ── Hybrid search / BM25 ───────────────────────────────────────────────
+
+    /// <summary>
+    /// BM25 k1 parameter (term-frequency saturation). Typical range 1.2–2.0.
+    /// </summary>
+    public double Bm25K1 { get; }
+
+    /// <summary>BM25 b parameter (length normalisation). Range 0–1.</summary>
+    public double Bm25B { get; }
+
+    // ── Query Rewriting ─────────────────────────────────────────────────────
+
+    /// <summary>
+    /// When true, the system calls the LLM once before retrieval to produce
+    /// 3 search query rewrites, then merges all results with RRF.
+    /// </summary>
+    public bool QueryRewrite { get; }
+
+    // ── Reranking ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// When true, the top candidates are reranked with one LLM call that
+    /// scores each chunk 0–10 for relevance before selecting top-K.
+    /// </summary>
+    public bool Rerank { get; }
+
+    /// <summary>
+    /// How many merged candidates to send to the reranker.
+    /// Only used when RERANK=true.
+    /// </summary>
+    public int RerankCandidateK { get; }
 
     // ── Chunking Settings ───────────────────────────────────────────────────
 
@@ -48,31 +88,43 @@ public class AppConfig
 
     /// <summary>
     /// How many sentences of overlap to include at the start of each new
-    /// chunk from the previous chunk.  Overlap helps preserve context at
-    /// chunk boundaries.
+    /// chunk from the previous chunk.
     /// </summary>
     public int ChunkOverlapSentences { get; }
+
+    // ── Embedding Settings ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Identifier for the embedding model used at ingest time.
+    /// Stored in the index file. At query time the system refuses to run
+    /// if the current model name differs from the stored one.
+    /// Built-in values: "all-MiniLM-L6-v2" (default).
+    /// </summary>
+    public string EmbeddingModel { get; }
 
     // ── Storage Settings ────────────────────────────────────────────────────
 
     /// <summary>
     /// Directory where ingested vector stores are saved.
-    /// Defaults to a "data" folder next to the solution root when running
-    /// from the standard project layout, or the current directory otherwise.
     /// </summary>
     public string DataDirectory { get; }
 
-    /// <summary>
-    /// Name of the active knowledge-base collection.
-    /// Different collection names produce different JSON files, which lets
-    /// you maintain separate knowledge bases (e.g. "docs", "research").
-    /// </summary>
+    /// <summary>Name of the active knowledge-base collection.</summary>
     public string CollectionName { get; }
 
     // ── Web Loader Settings ─────────────────────────────────────────────────
 
     /// <summary>HTTP request timeout when fetching web pages (seconds).</summary>
     public int WebTimeoutSeconds { get; }
+
+    // ── Debug / Eval ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// When true, the query command prints detailed diagnostics:
+    /// rewritten queries, vector hits, BM25 hits, fused ranking, reranker
+    /// scores.  Set DEBUG=true or pass --debug on the command line.
+    /// </summary>
+    public bool Debug { get; set; }   // settable so --debug flag can override
 
     // ── Constructor ─────────────────────────────────────────────────────────
 
@@ -82,26 +134,42 @@ public class AppConfig
         GroqApiKey = Env("GROQ_API_KEY", "");
 
         // LLM
-        GroqModel       = Env("GROQ_MODEL",       "openai/gpt-oss-120b");
-        LlmTemperature  = double.Parse(Env("LLM_TEMPERATURE", "0.1"));
+        GroqModel      = Env("GROQ_MODEL",      "openai/gpt-oss-120b");
+        LlmTemperature = double.Parse(Env("LLM_TEMPERATURE", "0.1"));
 
         // Retrieval
-        RetrievalTopK       = int.Parse(Env("RETRIEVAL_TOP_K",         "5"));
+        RetrievalTopK       = int.Parse(Env("RETRIEVAL_TOP_K",         "6"));
         SimilarityThreshold = float.Parse(Env("SIMILARITY_THRESHOLD",  "0.15"));
+        RetrievalCandidateK = int.Parse(Env("RETRIEVAL_CANDIDATE_K",   "20"));
+
+        // BM25
+        Bm25K1 = double.Parse(Env("BM25_K1", "1.5"));
+        Bm25B  = double.Parse(Env("BM25_B",  "0.75"));
+
+        // Query rewriting
+        QueryRewrite = bool.Parse(Env("QUERY_REWRITE", "true"));
+
+        // Reranking
+        Rerank           = bool.Parse(Env("RERANK",             "true"));
+        RerankCandidateK = int.Parse(Env("RERANK_CANDIDATE_K",  "20"));
 
         // Chunking
-        ChunkMaxChars        = int.Parse(Env("CHUNK_MAX_CHARS",          "1000"));
-        ChunkOverlapSentences = int.Parse(Env("CHUNK_OVERLAP_SENTENCES", "2"));
+        ChunkMaxChars         = int.Parse(Env("CHUNK_MAX_CHARS",          "500"));
+        ChunkOverlapSentences = int.Parse(Env("CHUNK_OVERLAP_SENTENCES",  "2"));
 
-        // Storage — resolve the data directory relative to the project root
-        // when running from the standard build output location, otherwise
-        // fall back to the current working directory.
+        // Embedding model identifier
+        EmbeddingModel = Env("EMBEDDING_MODEL", "all-MiniLM-L6-v2");
+
+        // Storage
         var defaultData = ResolveDefaultDataDir();
         DataDirectory  = Env("DATA_DIRECTORY", defaultData);
         CollectionName = Env("COLLECTION_NAME", "default");
 
         // Web
         WebTimeoutSeconds = int.Parse(Env("WEB_TIMEOUT_SECONDS", "30"));
+
+        // Debug
+        Debug = bool.Parse(Env("DEBUG", "false"));
     }
 
     // ── Validation ──────────────────────────────────────────────────────────
@@ -125,19 +193,16 @@ public class AppConfig
 
     /// <summary>
     /// Walks up from the binary's output folder to locate the repository root
-    /// "data" directory.  This handles the common case of running from
-    /// bin/Debug/net10.0 inside the project.
+    /// "data" directory.
     /// </summary>
     private static string ResolveDefaultDataDir()
     {
-        // Try: <baseDir>/../../../../data  (bin/Debug/net10.0 → repo root)
         var candidate = Path.GetFullPath(
             Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "data"));
 
         if (Directory.Exists(candidate))
             return candidate;
 
-        // Fall back to a "data" subfolder next to the current working directory
         return Path.Combine(Directory.GetCurrentDirectory(), "data");
     }
 }

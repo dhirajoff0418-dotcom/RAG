@@ -8,6 +8,10 @@ obj/
 
 # Vector store files — regenerate locally with `bookrag ingest`
 data/*.json
+data/*.meta.json
+
+# Large document files (re-download or add manually)
+data/*.pdf
 
 # IDE files
 .vs/

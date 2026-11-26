@@ -35,7 +35,11 @@ public class Chunk
     /// </summary>
     public string? Url { get; set; }
 
-    /// <summary>The actual passage text that is passed to the LLM as context.</summary>
+    /// <summary>
+    /// The actual passage text that is passed to the LLM as context.
+    /// For PDF chunks this includes a "[Page N]" prefix so the LLM can
+    /// cite page numbers accurately.
+    /// </summary>
     public string Text { get; set; } = "";
 
     /// <summary>
@@ -43,6 +47,13 @@ public class Chunk
     /// Serialised to JSON for persistent storage.
     /// </summary>
     public float[]? Embedding { get; set; }
+
+    /// <summary>
+    /// Name/identifier of the embedding model used to produce
+    /// <see cref="Embedding"/>.  Stored so the query command can warn
+    /// (or refuse) if the current model differs from the one at ingest time.
+    /// </summary>
+    public string? EmbeddingModel { get; set; }
 
     // ── Convenience ──────────────────────────────────────────────────────────
 
